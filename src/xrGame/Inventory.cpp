@@ -632,7 +632,16 @@ void CInventory::Activate(u16 slot, bool bForce)
 
 PIItem CInventory::ItemFromSlot(u16 slot) const
 {
-    VERIFY(NO_ACTIVE_SLOT != slot);
+    // Deliberately NOT VERIFY(NO_ACTIVE_SLOT != slot). NO_ACTIVE_SLOT is 0, and
+    // m_slots[0] is never a real slot -- slots start at KNIFE_SLOT. Every ruck
+    // item has base_slot_id 0, because CInventoryItem::Load only sets it when the
+    // section has a "slot" key. So a double-click on an ordinary medkit or ammo
+    // box in the bag reaches here with slot 0, which is a normal state, not a bug.
+    // The assert turned that into a SIGTRAP that killed the process -- and since
+    // VERIFY compiles to `do {} while (false)` outside XR_DEBUG, no shipping
+    // OpenXRay build ever hit it. The bounds check below already answers the
+    // question correctly: m_slots[0] holds no item, so nullptr comes back and the
+    // caller takes its "not in a slot" path.
     if (slot < m_slots.size())
         return m_slots[slot].m_pIItem;
     return nullptr;

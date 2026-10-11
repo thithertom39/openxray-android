@@ -424,6 +424,22 @@ end
 --	новой схемы.
 	]] --
 
+-- Resolve a class id by name without raising when this build does not have it.
+-- clsid is a luabind class: reading a missing static throws instead of
+-- returning nil, and that error escapes the callback and kills the process.
+-- SoC spells these with an "_s" suffix, CoP/CS without it, and each build only
+-- defines its own. First spelling that resolves wins; nil when neither exists,
+-- and comparing a number against nil is simply false.
+local function clsid_of(...)
+	for _, name in ipairs({...}) do
+		local ok, id = pcall(function() return clsid[name] end)
+		if ok and id then
+			return id
+		end
+	end
+	return nil
+end
+
 function reset_generic_schemes_on_scheme_switch(npc, scheme, section)
 	--printf("_bp: reset_generic_schemes_on_scheme_switch: npc:name()='%s'", npc:name())
 	local st = db.storage[npc:id()]
@@ -460,7 +476,7 @@ function reset_generic_schemes_on_scheme_switch(npc, scheme, section)
 		--printf("_bp: disabling talk")
 		--npc:disable_talk() -- теперь делается в dialog_manager_reset
 		mob_release(npc)
-		if get_clsid(npc) == clsid.bloodsucker_s then
+		if get_clsid(npc) == clsid_of("bloodsucker", "bloodsucker_s") then
 			if scheme == "nil" then
 				npc:set_manual_invisibility(false)
 			else

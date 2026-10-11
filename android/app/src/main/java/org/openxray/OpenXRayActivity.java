@@ -129,19 +129,6 @@ public class OpenXRayActivity extends SDLActivity {
     }
 
     @Override
-    protected org.libsdl.app.SDLSurface createSDLSurface(android.content.Context context) {
-        org.libsdl.app.SDLSurface surface = super.createSDLSurface(context);
-        Intent intent = getIntent();
-        int targetW = (intent != null) ? intent.getIntExtra("extra_res_width", 0) : 0;
-        int targetH = (intent != null) ? intent.getIntExtra("extra_res_height", 0) : 0;
-        if (targetW > 0 && targetH > 0) {
-            AppLog.i("Video", "Setting fixed surface resolution from launcher: " + targetW + "x" + targetH);
-            surface.setFixedResolution(targetW, targetH);
-        }
-        return surface;
-    }
-
-    @Override
     public void setOrientationBis(int w, int h, boolean resizable, String hint) {
         setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
     }
@@ -161,6 +148,10 @@ public class OpenXRayActivity extends SDLActivity {
             : null;
         AppLog.init(this, path);
         AppLog.i("Activity", "OpenXRayActivity onCreate started");
+        // From here on the process is expected to die abnormally sometimes.
+        // The marker is only removed in onDestroy, so whatever survives until
+        // the next launcher start is what CrashReporter treats as a crash.
+        CrashReporter.markGameStarted(this, path);
 
         String[] args = getArguments();
         AppLog.i("Activity", "Launch arguments: " + Arrays.toString(args));
@@ -298,6 +289,9 @@ public class OpenXRayActivity extends SDLActivity {
     protected void onDestroy() {
         AppLog.i("Activity", "OpenXRayActivity onDestroy");
         super.onDestroy();
+        // A clean teardown: drop the crash marker so the next launcher start
+        // does not offer to report a non-crash.
+        CrashReporter.markGameStoppedCleanly(this);
         AppLog.close();
     }
 
@@ -448,11 +442,14 @@ public class OpenXRayActivity extends SDLActivity {
             AppLog.i("FileSystem", "Game mode for res overlay: " + gameMode);
 
             // res/ is split per game: res/soc/* for Shadow of Chernobyl,
-            // res/cop/* for Call of Pripyat (Clear Sky reuses it until it
-            // gets its own overlay).
+            // res/cop/* for Call of Pripyat, res/cs/* for Clear Sky.
+            // Clear Sky used to share res/cop; it has its own folder now, so a
+            // fix made for one build stops leaking into the other.
             String resBase = "cop";
             if ("soc".equals(gameMode)) {
                 resBase = "soc";
+            } else if ("cs".equals(gameMode)) {
+                resBase = "cs";
             }
             AppLog.i("FileSystem", "Res source folder: " + resBase);
 
@@ -475,6 +472,7 @@ public class OpenXRayActivity extends SDLActivity {
             File targetFsgame = new File(dir, "fsgame.ltx");
             installFsgameConfig(resBase, targetFsgame);
             AppLog.i("FileSystem", "Asset check finished.");
+            verifyOverlayScripts(dir, gameMode, resBase);
         } catch (Exception e) {
             AppLog.e("FileSystem", "Error creating game directories / extracting assets: " + e.getMessage(), e);
         }
@@ -582,6 +580,126 @@ public class OpenXRayActivity extends SDLActivity {
             }
         } catch (Exception e) {
             AppLog.e("FileSystem", "extractAssetFolder error for " + assetPath + ": " + e.getMessage(), e);
+        }
+    }
+
+    // Overlay scripts that must NOT exist in the game directory.
+    //
+    // Dropping one from res/<mode>/gamedata/scripts/ is not enough on its own:
+    // earlier launches already extracted it and it is still on disk, and a loose
+    // file shadows the same-named entry inside the .db archives. Without this the
+    // retired copy keeps being loaded forever, because extractAssetFolder only
+    // ever writes and never deletes.
+    //
+    // The list is deliberately not hardcoded. res/<mode>/backup/gamedata/scripts/
+    // holds both the archive of every retired file and the manifest of what to
+    // remove, so putting a file in there is the single action that retires it.
+    // That path sits outside gamedata/, which means it ships inside the APK but
+    // is never extracted to the device.
+    //
+    // Clear Sky currently retires 23 files and keeps exactly one overlay
+    // (gamedata/scripts/_g.script, the game's own file plus the device()
+    // compatibility shim). Everything the game ships is better than a copy we
+    // maintain: xrs_dyn_music.script in particular was a foreign generation of
+    // the module (music_start/fade_theme vs the game's start_theme/on_actor_update)
+    // and broke callbacks for everything that registered through it.
+    private void removeRetiredOverlayScripts(File gameDir, String gameMode) {
+        String[] retired = listAssets(gameMode + "/backup/gamedata/scripts");
+        if (retired == null || retired.length == 0) {
+            return;
+        }
+        File scriptsDir = new File(new File(gameDir, "gamedata"), "scripts");
+        if (!scriptsDir.isDirectory()) {
+            return;
+        }
+        for (String name : retired) {
+            if (!name.endsWith(".script")) {
+                continue;
+            }
+            File f = new File(scriptsDir, name);
+            if (!f.isFile()) {
+                continue;
+            }
+            // Rename rather than unlink, so a failed boot can still be
+            // inspected and the file put back by hand.
+            File stale = new File(scriptsDir, name + ".overlay_stale");
+            if (stale.exists() && !stale.delete()) {
+                AppLog.w("FileSystem", "Stale copy blocks retiring " + name + ", leaving it in place.");
+                continue;
+            }
+            if (f.renameTo(stale)) {
+                AppLog.i("FileSystem", "Retired overlay script (renamed): " + name);
+            } else if (f.delete()) {
+                AppLog.i("FileSystem", "Retired overlay script (deleted): " + name);
+            } else {
+                AppLog.w("FileSystem", "Could not retire overlay script: " + name);
+            }
+        }
+    }
+
+    private String[] listAssets(String assetPath) {
+        try {
+            return getAssets().list(assetPath);
+        } catch (Exception e) {
+            AppLog.w("FileSystem", "Could not list assets under " + assetPath);
+            return null;
+        }
+    }
+
+    // Sanity-check that the OpenXRay-specific overlay scripts/configs of the
+    // selected game mode are actually on disk before starting the engine.
+    // A missing script folder (e.g. a stale manual sync) makes the engine
+    // fall back into a broken state — doors with Lua on_use silently fail,
+    // touch UI callbacks disappear, etc. So detect it and re-extract.
+    private void verifyOverlayScripts(File gameDir, String gameMode, String resBase) {
+        // Runs before the presence check on every launch: a loose file on disk
+        // shadows the same-named entry inside the .db archives, so an overlay
+        // file retired from the APK would otherwise keep winning forever,
+        // because extractAssetFolder only ever writes and never deletes.
+        removeRetiredOverlayScripts(gameDir, gameMode);
+
+        // Clear Sky keeps its own scripts in the .db archives and retires the whole
+        // overlay, except xrs_dyn_music.script which needs the surge_manager
+        // guard that a CoP/SoC mix otherwise trips on every frame.
+        String[] requiredScripts = "soc".equals(gameMode)
+                ? new String[] { "class_registrator.script", "move_mgr.script",
+                                 "task_manager.script", "death_manager.script", "ui_main_menu.script" }
+                : "cs".equals(gameMode)
+                ? new String[] { "xrs_dyn_music.script", "xr_s.script" }
+                : new String[] { "_g.script", "ui_main_menu.script",
+                                 "xr_s.script", "xr_logic.script" };
+        File scriptsDir = new File(new File(gameDir, "gamedata"), "scripts");
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (!scriptsDir.isDirectory()) {
+            missing.add("gamedata/scripts (folder missing)");
+        } else {
+            for (String name : requiredScripts) {
+                File f = new File(scriptsDir, name);
+                if (!f.isFile() || f.length() == 0) {
+                    missing.add("gamedata/scripts/" + name);
+                }
+            }
+        }
+        File configDir = new File(new File(gameDir, "gamedata"),
+                "soc".equals(gameMode) ? "config" : "configs");
+        File openxrayLtx = new File(configDir, "openxray.ltx");
+        if (!openxrayLtx.isFile() || openxrayLtx.length() == 0) {
+            missing.add("gamedata/" + configDir.getName() + "/openxray.ltx");
+        }
+
+        if (!missing.isEmpty()) {
+            AppLog.w("FileSystem", "Overlay scripts missing for mode '" + gameMode
+                    + "': " + missing + " — re-extracting from APK assets.");
+            try {
+                extractAssetFolder(resBase + "/gamedata", new File(gameDir, "gamedata"));
+                patchGameMode(gameDir, gameMode);
+            } catch (Exception e) {
+                AppLog.e("FileSystem", "Failed to re-extract overlay: " + e.getMessage(), e);
+            }
+        } else {
+            int count = scriptsDir.list() != null ? scriptsDir.list().length : 0;
+            AppLog.i("FileSystem", "Overlay scripts check OK: " + count
+                    + " script files present in " + scriptsDir.getAbsolutePath());
         }
     }
 

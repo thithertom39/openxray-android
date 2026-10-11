@@ -160,6 +160,15 @@ void CRenderDevice::UpdateWindowProps()
         SDL_SetWindowPosition(m_sdlWnd, rect.x, rect.y);
     }
 
+#ifdef __ANDROID__
+    // On Android there is no windowed mode: shrinking the SDL window to
+    // psDeviceMode shrinks the EGL surface and the game renders in a
+    // corner. Force the window to the display size; the engine renders
+    // to the smaller FBO and CHW::Present stretches it to the window.
+    SDL_DisplayMode current;
+    SDL_GetCurrentDisplayMode(psDeviceMode.Monitor, &current);
+    SDL_SetWindowSize(m_sdlWnd, current.w, current.h);
+#else
     if (psDeviceMode.WindowStyle != rsFullscreenBorderless)
         SDL_SetWindowSize(m_sdlWnd, psDeviceMode.Width, psDeviceMode.Height);
     else
@@ -169,6 +178,7 @@ void CRenderDevice::UpdateWindowProps()
 
         SDL_SetWindowSize(m_sdlWnd, current.w, current.h);
     }
+#endif
 
     if (windowed)
     {
@@ -184,12 +194,14 @@ void CRenderDevice::UpdateWindowProps()
         SDL_SetWindowResizable(m_sdlWnd, SDL_FALSE);
         SDL_SetWindowFullscreen(m_sdlWnd, SDL_WINDOW_FULLSCREEN);
 
+#ifndef __ANDROID__
         SDL_DisplayMode mode;
         SDL_GetWindowDisplayMode(m_sdlWnd, &mode);
         mode.w = psDeviceMode.Width;
         mode.h = psDeviceMode.Height;
         mode.refresh_rate = psDeviceMode.RefreshRate;
         SDL_SetWindowDisplayMode(m_sdlWnd, &mode);
+#endif
     }
 
     SDL_PumpEvents();
@@ -276,29 +288,38 @@ void CRenderDevice::SelectResolution(const bool windowed)
         }
     }
 
-    // Internal resolution scaling: keep the window at its native size but render
-    // into smaller offscreen targets. Clamped so a tiny window never collapses to
-    // zero and the aspect ratio is preserved to within a pixel.
-    if (ps_render_scale > 0.0f && ps_render_scale < 1.0f)
-    {
-        const u32 scaled_w = (u32)(psDeviceMode.Width * ps_render_scale);
-        const u32 scaled_h = (u32)(psDeviceMode.Height * ps_render_scale);
-        dwWidth = scaled_w > 0 ? scaled_w : psDeviceMode.Width;
-        dwHeight = scaled_h > 0 ? scaled_h : psDeviceMode.Height;
+    // psDeviceMode.* stays the *requested* size; dwWidth/dwHeight are what the
+    // renderer actually uses, and everything downstream (every R2 render
+    // target, the screen-space command-list constants, the UI scale) is derived
+    // from those two numbers. Applying the scale here rather than in psDeviceMode
+    // keeps window/present code comparing against the true output resolution.
+    const float render_scale = _min(_max(ps_render_scale, 0.25f), 1.0f);
 
+    if (render_scale >= 0.999f)
+    {
+        dwWidth = psDeviceMode.Width;
+        dwHeight = psDeviceMode.Height;
+    }
+    else
+    {
+        // Keep both axes even and clamped to something a render target can
+        // actually hold, otherwise rounding can collapse a dimension to 0 on
+        // tiny windows and every RT allocation below fails.
+        const u32 scaled_w = (u32)_max(64.0f, std::round(psDeviceMode.Width * render_scale));
+        const u32 scaled_h = (u32)_max(64.0f, std::round(psDeviceMode.Height * render_scale));
+        dwWidth = scaled_w & ~1u;
+        dwHeight = scaled_h & ~1u;
+
+        // One line per change, so a support log can tell whether the user is
+        // actually rendering below native.
         static u32 s_logged_w = 0, s_logged_h = 0;
         if (dwWidth != s_logged_w || dwHeight != s_logged_h)
         {
             s_logged_w = dwWidth;
             s_logged_h = dwHeight;
             Msg("* RENDER SCALE %.2f: render %ux%u -> window %ux%u",
-                ps_render_scale, dwWidth, dwHeight, psDeviceMode.Width, psDeviceMode.Height);
+                render_scale, dwWidth, dwHeight, psDeviceMode.Width, psDeviceMode.Height);
         }
-    }
-    else
-    {
-        dwWidth = psDeviceMode.Width;
-        dwHeight = psDeviceMode.Height;
     }
 }
 

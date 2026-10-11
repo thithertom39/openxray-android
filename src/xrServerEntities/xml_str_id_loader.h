@@ -81,13 +81,12 @@ const ITEM_DATA* CSXML_IdToIndex::GetById(const shared_str& str_id, bool no_asse
 
     if (it == m_pItemDataVector->end())
     {
-#if 0 // ndef MASTER_GOLD
-        int i = 0;
-        for (it = m_pItemDataVector->begin(); m_pItemDataVector->end() != it; ++it, i++)
-            Msg("[%d]=[%s]", i, *(*it).id);
-#endif
-
-        R_ASSERT3(no_assert, "item not found, id", str_id.c_str());
+        // Deliberately NOT R_ASSERT3 here. Every direct caller dereferences the
+        // result immediately, so the assert turned a missing gameplay XML entry
+        // (a data problem) into a SIGTRAP that killed the whole process -- it was
+        // hit from a plain inventory double-click on user data whose profile list
+        // did not resolve. Report it loudly and let the caller skip the entry.
+        Msg("[error] %s: item not found, id=%s", file_str, str_id.c_str());
         return nullptr;
     }
 

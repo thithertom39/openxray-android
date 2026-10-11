@@ -14,7 +14,27 @@ android {
         versionCode 1
         versionName "1.6.02"
 
+        // Crash reporting to GitHub issues. Everything is opt-in at build time
+        // so a plain checkout ships a binary with no credentials in it:
+        //   ./gradlew assembleRelease -POXR_GITHUB_TOKEN=github_pat_...
+        // The token should be a fine-grained PAT limited to this repo with
+        // "Issues: Read and write" only — anything wider can be abused if the
+        // APK is unpacked. Never commit a real token here.
+        buildConfigField "String", "GITHUB_TOKEN",
+                "\"${(project.findProperty('OXR_GITHUB_TOKEN') ?: '').toString().replace('"', '\\"')}\""
+        buildConfigField "String", "GITHUB_REPO",
+                "\"${(project.findProperty('OXR_GITHUB_REPO') ?: 'Eternal-Entropia/openxray-android').toString()}\""
+        // Point this at a Cloudflare Worker to keep the token off the device
+        // entirely; the reporter then needs no Authorization header of its own
+        // beyond whatever the relay expects.
+        buildConfigField "String", "GITHUB_API_BASE",
+                "\"${(project.findProperty('OXR_GITHUB_API_BASE') ?: 'https://api.github.com').toString()}\""
+
         ndk {
+            // arm64 only. A 32-bit armeabi-v7a build doubles the native build
+            // time and the .so payload for devices that are effectively gone:
+            // minSdk is 24, and essentially every API 24+ device is 64-bit.
+            // Trade-off: the app no longer installs on 32-bit-only devices.
             abiFilters 'arm64-v8a'
         }
 
@@ -22,9 +42,7 @@ android {
             cmake {
                 arguments "-DANDROID_STL=c++_shared",
                           "-DBUILD_SHARED_LIBS=ON",
-                          "-DXRAY_USE_LUAJIT=ON",
-                          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384",
-                          "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
+                          "-DXRAY_USE_LUAJIT=ON"
                 cppFlags "-std=c++17 -frtti -fexceptions"
             }
         }
@@ -58,8 +76,8 @@ android {
                     // no LTO was ever performed. Keep 16k page alignment and
                     // pass -flto through to the linker to make LTO real.
                     arguments "-DCMAKE_BUILD_TYPE=Release",
-                              "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384 -flto=thin",
-                              "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-z,max-page-size=16384 -flto=thin"
+                              "-DCMAKE_SHARED_LINKER_FLAGS=-flto=thin",
+                              "-DCMAKE_EXE_LINKER_FLAGS=-flto=thin"
                 }
             }
         }
@@ -84,6 +102,12 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        // BuildConfig is off by default in AGP 8; the GitHub reporter reads
+        // the token/repo from it.
+        buildConfig true
     }
 
     sourceSets {

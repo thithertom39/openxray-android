@@ -45,7 +45,11 @@ public:
 
     IC u16 FirstSlot() const { return KNIFE_SLOT; }
     IC u16 LastSlot() const { return m_iLastSlot; } // not "end"
-    IC bool SlotIsPersistent(u16 slot_id) const { return m_slots[slot_id].m_bPersistent; }
+    // Bounds check is required, not defensive: SInvItemPlace::base_slot_id is a
+    // 6-bit field (0..63) while m_slots holds SLOTS_COUNT (14) entries, so any
+    // "slot" >= 14 in system.ltx lands out of range here. Reached from user data
+    // on the same line as the ItemFromSlot call in OnItemDbClick.
+    IC bool SlotIsPersistent(u16 slot_id) const { return slot_id < m_slots.size() && m_slots[slot_id].m_bPersistent; }
     bool Slot(u16 slot_id, PIItem pIItem, bool bNotActivate = false, bool strict_placement = false);
     bool Belt(PIItem pIItem, bool strict_placement = false);
     bool Ruck(PIItem pIItem, bool strict_placement = false);

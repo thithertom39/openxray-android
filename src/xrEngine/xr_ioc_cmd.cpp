@@ -819,6 +819,11 @@ void CCC_Register()
     CMD1(CCC_VidMonitor, "vid_monitor");
     CMD1(CCC_VidMode, "vid_mode");
     CMD1(CCC_VidWindowMode, "vid_window_mode");
+    // Internal resolution multiplier: 1.0 renders at the window size, 0.75
+    // renders at three quarters of it and lets Present() upscale. Changes need
+    // a vid_restart, same as vid_mode, because render targets are already
+    // allocated by the time this is parsed.
+    CMD4(CCC_Float, "render_scale", &ps_render_scale, 0.25f, 1.0f);
 
 #ifdef DEBUG
     CMD3(CCC_Token, "vid_bpp", &psDeviceMode.BitsPerPixel, vid_bpp_token);

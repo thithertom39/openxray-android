@@ -212,6 +212,12 @@ bool CUIActorMenu::OnItemStartDrag(CUICellItem* itm)
 
 bool CUIActorMenu::OnItemDbClick(CUICellItem* itm)
 {
+    // A cell can outlive its item: the inventory is rebuilt on the server thread
+    // while a double-click is still being dispatched. Every field below is
+    // dereferenced, so bail out rather than fault on a stale pointer.
+    if (!itm || !itm->m_pData || !m_pActorInvOwner)
+        return false;
+
     SetCurrentItem(itm);
     InfoCurItem(NULL);
     CUIDragDropListEx* old_owner = itm->OwnerList();

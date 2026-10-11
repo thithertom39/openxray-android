@@ -78,6 +78,17 @@ bool CDetailPathManager::compute_tangent(const STrajectoryPoint& start, const SC
     yaw1 = direction.getH();
     yaw1 = yaw2 = yaw1 >= 0.f ? yaw1 : yaw1 + PI_MUL_2;
 
+    // Second line of defence. compute_circles now rejects a non-finite radius
+    // and direction, but these yaws are built from start/dest position, circle
+    // centre and direction, any of which can still be non-finite from travel
+    // parameters derived from level geometry. atan2() of two infinities, or of
+    // (0,0) after a degenerate fallback, yields NaN, and every angle computed
+    // below would then be NaN. Returning false drops this tangent candidate:
+    // tangent_count simply stays lower, build_trajectory returns false for an
+    // empty set, and compute_path moves on to the next parameter combination.
+    if (!_valid(start_yaw) || !_valid(dest_yaw) || !_valid(yaw1))
+        return (false);
+
     if (start_cp * dest_cp >= 0.f)
     {
         // so, our tangents are outside
@@ -131,6 +142,13 @@ bool CDetailPathManager::compute_tangent(const STrajectoryPoint& start, const SC
         alpha = alpha >= 0.f ? alpha : alpha + PI_MUL_2;
         yaw2 = yaw1 < PI ? yaw1 + PI : yaw1 - PI;
     }
+
+    // The crossing branch above has no similar() guard on the centres, so
+    // distance can be 0 there and (r1+r2)/distance is 0/0 -- clamp() does not
+    // catch NaN, and acosf(NaN) is NaN, which reaches assign_angle as
+    // yaw1 +/- alpha. Same reasoning as the yaw guard above.
+    if (!_valid(alpha))
+        return (false);
 
     tangents[0] = start_circle;
     tangents[1] = dest_circle;

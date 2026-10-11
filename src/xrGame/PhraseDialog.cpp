@@ -197,7 +197,11 @@ void CPhraseDialog::Load(shared_str dialog_id)
 
 void CPhraseDialog::load_shared(LPCSTR)
 {
-    const ITEM_DATA& item_data = *id_to_index::GetById(m_DialogId);
+    const ITEM_DATA* p_item_data = id_to_index::GetById(m_DialogId);
+    if (!p_item_data)
+        return; // GetById already logged the missing id.
+
+    const ITEM_DATA& item_data = *p_item_data;
 
     CUIXml* pXML = item_data._xml;
     pXML->SetLocalRoot(pXML->GetRoot());

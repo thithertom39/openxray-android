@@ -835,6 +835,34 @@ void CScriptEngine::init(export_func exporter, bool loadGlobalNamespace)
 
     luabind::bind_class_info(lua());
     setup_callbacks();
+
+    // The standard library must exist before exporter() runs. exporter() is what
+    // calls every <subsystem>::script_register(), and several of those call
+    // luaL_dostring/lua_pcall while registering -- CConsole::script_register
+    // installs a console proxy that way, for instance. With the libraries opened
+    // afterwards those chunks ran against a bare state with no setmetatable,
+    // log or string, failed, and the failure was silently discarded (the return
+    // code of luaL_dostring was never checked). Game scripts then called
+    // get_console() from top-level code (xrs_dyn_music, ui_main_menu, ...) with
+    // no proxy in place, and the chunk died part-way through loading.
+    //
+    // Stock luabind opens the libraries before luabind::open() as well; this was
+    // the other way round.
+    luajit::open_lib(lua(), "", luaopen_base);
+    luajit::open_lib(lua(), LUA_LOADLIBNAME, luaopen_package);
+    luajit::open_lib(lua(), LUA_TABLIBNAME, luaopen_table);
+    luajit::open_lib(lua(), LUA_IOLIBNAME, luaopen_io);
+    luajit::open_lib(lua(), LUA_OSLIBNAME, luaopen_os);
+    luajit::open_lib(lua(), LUA_MATHLIBNAME, luaopen_math);
+    luajit::open_lib(lua(), LUA_STRLIBNAME, luaopen_string);
+    luajit::open_lib(lua(), LUA_BITLIBNAME, luaopen_bit);
+    luajit::open_lib(lua(), LUA_FFILIBNAME, luaopen_ffi);
+#ifndef MASTER_GOLD
+    luajit::open_lib(lua(), LUA_DBLIBNAME, luaopen_debug);
+#endif
+
+    luaopen_xrluafix(lua());
+
     if (exporter)
         exporter(lua());
     if (std::strstr(Core.Params, "-dump_bindings") && !bindingsDumped)
@@ -853,21 +881,6 @@ void CScriptEngine::init(export_func exporter, bool loadGlobalNamespace)
         dumper.Dump(lua(), writer, options);
         FS.w_close(writer);
     }
-
-    luajit::open_lib(lua(), "", luaopen_base);
-    luajit::open_lib(lua(), LUA_LOADLIBNAME, luaopen_package);
-    luajit::open_lib(lua(), LUA_TABLIBNAME, luaopen_table);
-    luajit::open_lib(lua(), LUA_IOLIBNAME, luaopen_io);
-    luajit::open_lib(lua(), LUA_OSLIBNAME, luaopen_os);
-    luajit::open_lib(lua(), LUA_MATHLIBNAME, luaopen_math);
-    luajit::open_lib(lua(), LUA_STRLIBNAME, luaopen_string);
-    luajit::open_lib(lua(), LUA_BITLIBNAME, luaopen_bit);
-    luajit::open_lib(lua(), LUA_FFILIBNAME, luaopen_ffi);
-#ifndef MASTER_GOLD
-    luajit::open_lib(lua(), LUA_DBLIBNAME, luaopen_debug);
-#endif
-
-    luaopen_xrluafix(lua());
 
     tracy::LuaRegister(lua());
 
@@ -897,6 +910,66 @@ void CScriptEngine::init(export_func exporter, bool loadGlobalNamespace)
 
         luaL_dostring(lua(), packagePath);
      }
+
+    // Diagnostic: which engine globals are actually reachable from Lua right
+    // now, before any game script loads.
+    //
+    // Several scripts abort their chunk mid-load on a missing global --
+    // device(), get_console(), and the SoC-only surge_manager / task_manager /
+    // death_manager tables. The resulting Lua error surfaces far from the real
+    // cause (a nil callback argument several files away), which made this very
+    // hard to trace. Print the truth once, at a point known to work: the
+    // luaL_dostring calls above sit in the same place and clearly take effect.
+    {
+        static const char* const globals[] = {
+            "device", "get_console", "execute_console", "time_global", "alife",
+            "db", "class", "level", "modules", "xr_s", "xr_logic", "Msg",
+            "surge_manager", "task_manager", "death_manager",
+        };
+        // Note: do not read Core.Params here. init() runs from
+        // CResourceManager::LS_Load() during CRenderDevice::Create(), before
+        // Core.Params is populated, and dereferencing it segfaults inside
+        // vsnprintf's strlen.
+        Msg("[globals] ---- lua global reachability ----");
+        for (const char* name : globals)
+        {
+            lua_getglobal(lua(), name);
+            const int type = lua_type(lua(), -1);
+            if (type == LUA_TNIL || type == LUA_TNONE)
+                Msg("[globals]   %-16s MISSING", name);
+            else
+                Msg("[globals]   %-16s %s", name, lua_typename(lua(), type));
+            lua_pop(lua(), 1);
+        }
+
+        // Knowing the *type* of a global is not enough: "device is a function"
+        // and yet device().frame can still fail. bind_stalker.script:73 dies
+        // on 'device().frame' with '[C] __index' at the top of the traceback,
+        // which means device() itself succeeded and returned something that
+        // cannot be indexed. Evaluate the exact expressions the scripts use,
+        // under pcall so a failure is reported instead of aborting init.
+        static const char* const probes[] = {
+            "device()", "device().frame", "device().precache_frame",
+            "render_device()", "get_console()", "alife()",
+        };
+        for (const char* expr : probes)
+        {
+            if (luaL_loadstring(lua(), expr) != 0)
+            {
+                Msg("[globals]   %-26s SYNTAX ERROR", expr);
+                lua_pop(lua(), 1);
+                continue;
+            }
+            if (lua_pcall(lua(), 0, 1, 0) != 0)
+            {
+                Msg("[globals]   %-26s FAILS: %s", expr, lua_tostring(lua(), -1));
+                lua_pop(lua(), 1);
+                continue;
+            }
+            Msg("[globals]   %-26s ok (%s)", expr, lua_typename(lua(), lua_type(lua(), -1)));
+            lua_pop(lua(), 1);
+        }
+    }
 
     // XXX nitrocaster: with vanilla scripts, '-nojit' option requires script profiler to be disabled. The reason
     // is that lua hooks somehow make 'super' global unavailable (is's used all over the vanilla scripts).

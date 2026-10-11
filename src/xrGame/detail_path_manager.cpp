@@ -225,15 +225,33 @@ void CDetailPathManager::assign_angle(float& angle, const float start_yaw, const
 
 bool CDetailPathManager::compute_circles(STrajectoryPoint& point, SCirclePoint* circles)
 {
+    // Deliberately NOT VERIFY2 here, same reasoning as CInventory::ItemFromSlot:
+    // this function already has a defined failure path (return false), and
+    // compute_trajectory propagates it by trying the next parameter combination.
+    // The assert only ever killed XR_DEBUG builds before that path could run,
+    // which is why a debug APK died where a release one quietly moved on.
     if (fis_zero(point.angular_velocity))
-    {
-        VERIFY2(0, "point.angular_velocity is zero");
         return false;
-    }
 
     point.radius = _abs(point.linear_velocity) / point.angular_velocity;
+
+    // fis_zero() above rejects only an exact zero. A denormal angular velocity
+    // divides to an infinite radius, and the infinite radius makes every circle
+    // centre below infinite. compute_tangent then does (position - centre) on
+    // those infinities and atan2(-inf,-inf) is NaN, which arrives in assign_angle
+    // and trips VERIFY(_valid(angle)) on a task worker thread. _valid() also
+    // catches denormals, NaN and both infinities in one test.
+    if (!_valid(point.radius))
+        return false;
+
+    // A non-unit or non-finite direction scales the centres by an arbitrary
+    // amount, which is the same class of failure: reject it here instead of
+    // asserting, so the path builder just skips this trajectory candidate.
+    const float dir_len_sq = point.direction.square_magnitude();
+    if (!_valid(dir_len_sq) || !fsimilar(dir_len_sq, 1.f))
+        return false;
+
     circles[0].radius = circles[1].radius = point.radius;
-    VERIFY(fsimilar(point.direction.square_magnitude(), 1.f));
     circles[0].center.x = point.direction.y * point.radius + point.position.x;
     circles[0].center.y = -point.direction.x * point.radius + point.position.y;
     circles[1].center.x = -point.direction.y * point.radius + point.position.x;

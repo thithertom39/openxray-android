@@ -9,7 +9,18 @@ R_occlusion::~R_occlusion(void) { occq_destroy(); }
 void R_occlusion::occq_create(u32 limit)
 {
     ZoneScoped;
+#if defined(USE_OGL)
+    // GL ES allows exactly one active query per target, and this code has no
+    // guard against opening one while another is still open: light::vis_prepare
+    // has no re-entry check on vis.pending, and both smapvis and pixel_calculator
+    // call render_graph() with a query already open. The nested glBeginQuery is
+    // rejected by the driver, and the matching glEndQuery is then left with
+    // nothing to close -- CHK_GL turns that into a fatal GL error.
+    // Off by default on GL; pass -occq to opt back in.
+    enabled = strstr(Core.Params, "-occq") != nullptr;
+#else
     enabled = strstr(Core.Params, "-no_occq") ? false : true;
+#endif
     pool.reserve(limit);
     used.reserve(limit);
     fids.reserve(limit);

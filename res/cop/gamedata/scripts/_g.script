@@ -535,68 +535,93 @@ function start_game_callback()
 
 
 
-	monster_classes = {
-		[clsid.bloodsucker_s] 			= true,
-		[clsid.boar_s] 					= true,
-		[clsid.dog_s] 					= true,
-		[clsid.flesh_s] 				= true,
-		[clsid.pseudodog_s] 			= true,
-		[clsid.burer_s] 				= true,
---		[clsid.cat_s] 					= true,
-		[clsid.chimera_s] 				= true,
-		[clsid.controller_s] 			= true,
---		[clsid.fracture_s] 				= true,
-		[clsid.poltergeist_s] 			= true,
-		[clsid.gigant_s] 				= true,
---		[clsid.zombie_s] 				= true,
-		[clsid.snork_s] 				= true,
-		[clsid.tushkano_s] 				= true,
-		[clsid.psy_dog_s] 				= true,
-		[clsid.psy_dog_phantom_s] 		= true}
+	-- Build a {class_id = true} table from class *names*, skipping any that this
+	-- game build does not have.
+	--
+	-- clsid is a luabind class, so reading a missing static raises
+	-- "no static 'X' in class 'clsid'" instead of returning nil, and that error
+	-- escapes start_game_callback and takes the whole process down with it.
+	-- That is not hypothetical: running this file in Clear Sky died on
+	-- [clsid.wpn_auto_shotgun_s] at line 568, because the SoC spelling of a
+	-- weapon was used for a build that never had it.
+	--
+	-- SoC spells its classes with an "_s" suffix and ships four that CoP/CS
+	-- never had at all (chimera, tushkano, psy_dog_phantom, zombie); CoP/CS
+	-- spell the rest without the suffix. Passing both spellings and letting the
+	-- lookup decide keeps one script correct for every mode.
+	local function clsid_set(...)
+		local t	=	{}
+		for _, name in ipairs({...}) do
+			local ok, id = pcall(function() return clsid[name] end)
+			if ok and id then
+				t[id]	=	true
+			end
+		end
+		return t
+	end
+
+	monster_classes	=	clsid_set(
+		"bloodsucker",		"bloodsucker_s",
+		"boar",				"boar_s",
+		"dog",				"dog_s",
+		"flesh",			"flesh_s",
+		"pseudodog",		"pseudodog_s",
+		"burer",			"burer_s",
+		"cat",				"cat_s",
+		"chimera",			"chimera_s",
+		"controller",		"controller_s",
+		"fracture",			"fracture_s",
+		"poltergeist",		"poltergeist_s",
+		"gigant",			"gigant_s",
+		"zombie",			"zombie_s",
+		"snork",			"snork_s",
+		"tushkano",			"tushkano_s",
+		"psy_dog",			"psy_dog_s",
+		"psy_dog_phantom",	"psy_dog_phantom_s")
 
 	stalker_classes = {
 		[clsid.script_actor] 			= true,
 		[clsid.script_stalker] 			= true}
 
-	weapon_classes = {
-		[clsid.wpn_vintorez_s] 			= true,
-		[clsid.wpn_ak74_s] 				= true,
-		[clsid.wpn_lr300_s] 			= true,
-		[clsid.wpn_hpsa_s] 				= true,
-		[clsid.wpn_pm_s] 				= true,
-		[clsid.wpn_shotgun_s] 			= true,
-		[clsid.wpn_auto_shotgun_s]		= true,
-		[clsid.wpn_bm16_s] 				= true,
-		[clsid.wpn_svd_s] 				= true,
-		[clsid.wpn_svu_s] 				= true,
-		[clsid.wpn_rg6_s] 				= true,
-		[clsid.wpn_rpg7_s] 				= true,
-		[clsid.wpn_val_s] 				= true,
-		[clsid.wpn_walther_s] 			= true,
-		[clsid.wpn_usp45_s] 			= true,
-		[clsid.wpn_groza_s] 			= true,
-		[clsid.wpn_knife_s] 			= true,
-		[clsid.wpn_grenade_f1_s] 		= true,
-		[clsid.wpn_grenade_rgd5_s] 		= true,
-		[clsid.wpn_grenade_launcher] 	= true,
-		[clsid.wpn_grenade_fake] 		= true}
+	weapon_classes	=	clsid_set(
+		"wpn_vintorez",			"wpn_vintorez_s",
+		"wpn_ak74",				"wpn_ak74_s",
+		"wpn_lr300",			"wpn_lr300_s",
+		"wpn_hpsa",				"wpn_hpsa_s",
+		"wpn_pm",				"wpn_pm_s",
+		"wpn_shotgun",			"wpn_shotgun_s",
+		"wpn_auto_shotgun",		"wpn_auto_shotgun_s",
+		"wpn_bm16",				"wpn_bm16_s",
+		"wpn_svd",				"wpn_svd_s",
+		"wpn_svu",				"wpn_svu_s",
+		"wpn_rg6",				"wpn_rg6_s",
+		"wpn_rpg7",				"wpn_rpg7_s",
+		"wpn_val",				"wpn_val_s",
+		"wpn_walther",			"wpn_walther_s",
+		"wpn_usp45",			"wpn_usp45_s",
+		"wpn_groza",			"wpn_groza_s",
+		"wpn_knife",			"wpn_knife_s",
+		"wpn_grenade_f1",		"wpn_grenade_f1_s",
+		"wpn_grenade_rgd5",		"wpn_grenade_rgd5_s",
+		"wpn_grenade_launcher",
+		"wpn_grenade_fake")
 
-	artefact_classes = {
-		[clsid.art_bast_artefact] 		= true,
-		[clsid.art_black_drops] 		= true,
-		[clsid.art_dummy] 				= true,
-		[clsid.art_electric_ball] 		= true,
-		[clsid.art_faded_ball] 			= true,
-		[clsid.art_galantine] 			= true,
-		[clsid.art_gravi] 				= true,
-		[clsid.art_gravi_black] 		= true,
-		[clsid.art_mercury_ball] 		= true,
-		[clsid.art_needles] 			= true,
-		[clsid.art_rusty_hair] 			= true,
-		[clsid.art_thorn] 				= true,
-		[clsid.art_zuda] 				= true,
-		[clsid.artefact] 				= true,
-		[clsid.artefact_s] 				= true}
+	artefact_classes	=	clsid_set(
+		"art_bast_artefact",
+		"art_black_drops",
+		"art_dummy",
+		"art_electric_ball",
+		"art_faded_ball",
+		"art_galantine",
+		"art_gravi",
+		"art_gravi_black",
+		"art_mercury_ball",
+		"art_needles",
+		"art_rusty_hair",
+		"art_thorn",
+		"art_zuda",
+		"artefact",
+		"artefact_s")
 
 	printf	("start_game_callback called")
 	smart_names.init_smart_names_table()
@@ -788,6 +813,13 @@ function change_team_squad_group(se_obj, team, squad, group)
 	end
 	--printf("_G:TSG: [%s][%s][%s]", tostring(se_obj.team), tostring(se_obj.squad), tostring(se_obj.group))
 end
+-- sim_board.script ships inside the .db archives, so it is not part of this
+-- overlay and cannot be fixed here -- and it calls this function with the
+-- transposed spelling "sqaud". Both names have to resolve: when only the
+-- correctly spelled one existed, registering a smart zone during new_game hit
+-- "attempt to call global 'change_team_sqaud_group' (a nil value)" and took
+-- the process down.
+change_team_sqaud_group = change_team_squad_group
 --     Story_ID -------------------------------------------------------------
 function add_story_object(obj_id , story_obj_id)
 	story_objects.get_story_objects_registry():register(obj_id , story_obj_id)

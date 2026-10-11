@@ -26,16 +26,14 @@ string512 g_sBenchmarkName;
 int ps_fps_limit = 501;
 int ps_fps_limit_in_menu = 60;
 
-#if defined(XR_PLATFORM_ANDROID) && !defined(_EDITOR)
-// Internal resolution scale. 1.0 = native window resolution. Lowering it shrinks
-// every offscreen render target (R2 allocates them from Device.dwWidth/dwHeight),
-// which is the single biggest fill-rate win on mobile GPUs. The UI scales itself
-// from dwWidth/dwHeight (UICore::OnDeviceReset) and Present() upscales on blit,
-// so gameplay and menus stay laid out correctly.
-float ps_render_scale = 0.6f;
-#else
+// Internal resolution scale, applied in CRenderDevice::SelectResolution().
+// 1.0 = render at the window size. Lower values shrink Device.dwWidth/dwHeight,
+// which every R2 render target and screen-space constant is derived from, so
+// the whole frame shrinks; CHW::Present() then stretches the FBO back to the
+// window with a GL_LINEAR blit, exactly as it already does for a vid_mode
+// below native. Shaders need no changes: they read the size from the command
+// list constants (see r2.cpp set_c), so existing .ps sources keep working.
 float ps_render_scale = 1.0f;
-#endif
 
 bool g_bLoaded = false;
 ref_light precache_light = 0;

@@ -138,12 +138,32 @@ set(CCOPTIONS "${CCOPT};${XCFLAGS}")
 
 target_compile_options(xrLuaJIT PRIVATE ${CCOPTIONS})
 
-execute_process(
-    COMMAND ${CMAKE_C_COMPILER} ${CCOPTIONS} -E lj_arch.h -dM
-    WORKING_DIRECTORY "${LUAJIT_DIR}"
-    OUTPUT_VARIABLE TESTARCH_OUTPUT
-    ERROR_VARIABLE TESTARCH_ERROR
-)
+if (ANDROID)
+    # Pick the LLVM target triple from the ABI so 32-bit (armeabi-v7a),
+    # x86 and x64 builds detect the right LuaJIT architecture too.
+    if (CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
+        set(_luajit_target "arm-linux-androideabi24")
+    elseif (CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
+        set(_luajit_target "x86_64-none-linux-android24")
+    elseif (CMAKE_ANDROID_ARCH_ABI STREQUAL "x86")
+        set(_luajit_target "i686-none-linux-android24")
+    else()
+        set(_luajit_target "aarch64-none-linux-android24")
+    endif()
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} ${CCOPTIONS} --target=${_luajit_target} --sysroot=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot -E lj_arch.h -dM
+        WORKING_DIRECTORY "${LUAJIT_DIR}"
+        OUTPUT_VARIABLE TESTARCH_OUTPUT
+        ERROR_VARIABLE TESTARCH_ERROR
+    )
+else()
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} ${CCOPTIONS} -E lj_arch.h -dM
+        WORKING_DIRECTORY "${LUAJIT_DIR}"
+        OUTPUT_VARIABLE TESTARCH_OUTPUT
+        ERROR_VARIABLE TESTARCH_ERROR
+    )
+endif()
 
 if(NOT "${TESTARCH_ERROR}" STREQUAL "")
     message("TESTARCH_ERROR=${TESTARCH_ERROR}")
@@ -326,7 +346,12 @@ set(DASM_DASC "${LUAJIT_DIR}/vm_${DASM_ARCH}.dasc")
 set(DASM "${LUAJIT_DIR}/../dynasm/dynasm.lua")
 set(BUILDVM_ARCH "${CMAKE_CURRENT_BINARY_DIR}/buildvm_arch.h")
 
-if (ANDROID)
+# Cross-compiling Android needs host tools (minilua/buildvm) to cross-compile
+# LuaJIT's VM. Those are host binaries, so they cannot be built with the NDK
+# cross-compiler -- they need a native host compiler, which CI/Windows hosts
+# often lack. android/minilua.exe + android/buildvm.exe are checked in for
+# exactly this case, so prefer them whenever present.
+if ((ANDROID AND WIN32) OR (ANDROID AND EXISTS "${CMAKE_SOURCE_DIR}/android/minilua.exe"))
     set(MINILUA_FILE "${CMAKE_SOURCE_DIR}/android/minilua.exe")
     set(BUILDVM_FILE "${CMAKE_SOURCE_DIR}/android/buildvm.exe")
 

@@ -38,6 +38,29 @@ public class AppLog {
     private static Process sLogcatProcess = null;
     private static Thread sLogcatThread = null;
     private static volatile boolean sLogcatRunning = false;
+    /** Directory the running capture is bound to; a different one forces a restart. */
+    private static volatile File sLogcatDir = null;
+
+    /** Tears the logcat capture down so a new directory can be bound. */
+    private static void stopLogcatCapture() {
+        sLogcatRunning = false;
+        sLogcatDir = null;
+        if (sLogcatProcess != null) {
+            try {
+                sLogcatProcess.destroy();
+            } catch (Exception ignored) {}
+            sLogcatProcess = null;
+        }
+        // The writer flushes on every line, so a short join is enough to release
+        // the old file handle before the new capture rotates it.
+        Thread t = sLogcatThread;
+        if (t != null && t != Thread.currentThread()) {
+            try {
+                t.join(500);
+            } catch (InterruptedException ignored) {}
+        }
+        sLogcatThread = null;
+    }
 
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
 
@@ -308,9 +331,26 @@ public class AppLog {
         }
     }
 
+    /**
+     * Starts (or rebinds) the logcat capture.
+     *
+     * <p>The launcher and the game log into <em>different</em> directories
+     * ({@code <game_path>} vs {@code <game_path>/<mode>}), and both call
+     * {@link #init} in the same process. A plain "already running" guard meant
+     * the first caller won: the launcher's {@code init} started the capture for
+     * its own directory, the game's {@code init} was then silently skipped, and
+     * {@code <game>/<mode>/openxray_logcat.log} was never written again. Crash
+     * reports then kept shipping a frozen log from an older run.</p>
+     *
+     * <p>So the capture is bound to a directory, and a different directory tears
+     * the old one down and starts fresh.</p>
+     */
     private static void startLogcatCapture(File logDir) {
         if (sLogcatRunning) {
-            return;
+            if (logDir.equals(sLogcatDir)) {
+                return;
+            }
+            stopLogcatCapture();
         }
 
         File logcatFile = new File(logDir, LOGCAT_LOG_NAME);
@@ -323,6 +363,7 @@ public class AppLog {
         }
 
         sLogcatRunning = true;
+        sLogcatDir = logDir;
         sLogcatThread = new Thread(() -> {
             BufferedWriter writer = null;
             BufferedReader reader = null;
@@ -428,12 +469,7 @@ public class AppLog {
     }
 
     public static void close() {
-        sLogcatRunning = false;
-        if (sLogcatProcess != null) {
-            try {
-                sLogcatProcess.destroy();
-            } catch (Exception ignored) {}
-        }
+        stopLogcatCapture();
         flush();
         synchronized (sLock) {
             if (sAppLogWriter != null) {
@@ -458,5 +494,13 @@ public class AppLog {
             return new File(sCurrentLogDir, LOGCAT_LOG_NAME);
         }
         return null;
+    }
+
+    /**
+     * Directory the current session logs into, or null before {@link #init}.
+     * The crash reporter uses it to locate logs of the session that died.
+     */
+    public static File getCurrentLogDir() {
+        return sCurrentLogDir;
     }
 }

@@ -42,7 +42,39 @@ void CConsole::script_register(lua_State* luaState)
 
         def("get_console", +[]() -> CConsole*
         {
-            return Console;
+            // Many game scripts call this from top-level code while their chunk
+            // is still loading (xrs_dyn_music, ui_main_menu, ui_mp_main,
+            // ui_load_dialog, ui_save_dialog, ...). Returning null aborted the
+            // chunk mid-way, so every function defined below that point never
+            // existed -- and the visible crash was xr_s.register_callback
+            // receiving nil and dying with "table index is nil" several files
+            // away from the real cause.
+            //
+            // The Lua proxy installed at the end of this function cannot fix
+            // that: it is assigned into _G by luaL_dostring, while scripts
+            // resolve the name through luabind's module environment, and the
+            // result of luaL_dostring is never checked, so the override silently
+            // never took effect. Guarantee a valid object at the binding itself.
+            static CConsole* fallback = nullptr;
+            if (Console != nullptr)
+            {
+                static bool reported = false;
+                if (!reported)
+                {
+                    reported = true;
+                    Msg("[console-bind] get_console -> real Console %p", (void*)Console);
+                }
+                return Console;
+            }
+            if (fallback == nullptr)
+            {
+                fallback = new CConsole();
+                Msg("[console-bind] Console is NULL, created fallback %p. Scripts that call "
+                    "get_console() before the real console exists get an empty command table, "
+                    "so every get_* silently returns a default.",
+                    (void*)fallback);
+            }
+            return fallback;
         }),
 
         def("execute_console", +[](pcstr cmd)
@@ -72,8 +104,59 @@ void CConsole::script_register(lua_State* luaState)
         })
     ];
 
+    // Probe from C++ on purpose: at this point in startup the Lua environment has
+    // almost no globals yet (setmetatable and log are both nil), so a Lua-side
+    // probe silently does nothing. This reports exactly what the binding hands
+    // to scripts, instead of inferring it from the error text.
+    struct
+    {
+        const char* name;
+    } probe_names[] = { { "setmetatable" }, { "log" }, { "get_console" }, { "device" }, { "alife" } };
+
+    for (const auto& pn : probe_names)
+    {
+        // LuaJIT is 5.1: lua_getglobal is a macro over lua_getfield and returns
+        // void, so the value has to be inspected on the stack.
+        lua_getfield(luaState, LUA_GLOBALSINDEX, pn.name);
+        Msg("[console-bind] global '%s' is %s", pn.name,
+            lua_typename(luaState, lua_type(luaState, -1)));
+        lua_pop(luaState, 1);
+    }
+
+    lua_getfield(luaState, LUA_GLOBALSINDEX, "get_console");
+    if (lua_isfunction(luaState, -1))
+    {
+        if (lua_pcall(luaState, 0, 1, 0) == LUA_OK)
+        {
+            const int type = lua_type(luaState, -1);
+            Msg("[console-bind] C++ probe: get_console() -> %s", lua_typename(luaState, type));
+            if (lua_isuserdata(luaState, -1) && lua_getmetatable(luaState, -1))
+            {
+                Msg("[console-bind]   metatable is %s", lua_typename(luaState, lua_type(luaState, -1)));
+                lua_pushstring(luaState, "__index");
+                lua_rawget(luaState, -2);
+                Msg("[console-bind]   __index is %s", lua_typename(luaState, lua_type(luaState, -1)));
+                lua_pop(luaState, 1);
+                lua_pop(luaState, 1);
+            }
+            else if (lua_istable(luaState, -1))
+            {
+                lua_pushstring(luaState, "__index");
+                lua_rawget(luaState, -2);
+                Msg("[console-bind]   table, __index is %s", lua_typename(luaState, lua_type(luaState, -1)));
+                lua_pop(luaState, 1);
+            }
+        }
+        else
+        {
+            Msg("[console-bind] C++ probe: get_console() raised: %s",
+                lua_tostring(luaState, -1));
+        }
+        lua_pop(luaState, 1);
+    }
+
     // Ensure get_console in Lua always returns a working console proxy calling execute_console directly
-    luaL_dostring(luaState,
+    const int proxy_rc = luaL_dostring(luaState,
         "local real_get_console = get_console\n"
         "local console_proxy = {\n"
         "    execute = function(self, cmd)\n"
@@ -137,4 +220,10 @@ void CConsole::script_register(lua_State* luaState)
         "})\n"
         "get_console = function() return console_proxy end\n"
     );
+    if (proxy_rc != 0)
+    {
+        Msg("[console-bind] console proxy failed to install: %s",
+            lua_tostring(luaState, -1));
+        lua_pop(luaState, 1);
+    }
 }

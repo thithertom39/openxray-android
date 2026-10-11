@@ -29,6 +29,7 @@ On launch the matching folder is auto-extracted into the mode subfolder.
 The launcher also syncs [compatibility] game_mode in openxray.ltx
 (gamedata/config for soc, gamedata/configs for cs/cop) with the selected mode.
 
+lesad710 telegram channel about this port: https://t.me/st_mobile_port
 
 thanks: https://github.com/TmLev/xray-16/tree/refs/heads/tmlev/shadow-of-chernobyl
 

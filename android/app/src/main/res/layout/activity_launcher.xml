@@ -126,6 +126,18 @@
                             android:textSize="11sp"
                             android:textStyle="bold"
                             android:paddingHorizontal="8dp" />
+
+                        <Button
+                            android:id="@+id/btn_report_bug"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/btn_secondary"
+                            android:text="REPORT"
+                            android:textColor="@color/text_main"
+                            android:textSize="11sp"
+                            android:paddingHorizontal="8dp" />
                     </LinearLayout>
 
                     <TextView
@@ -225,7 +237,7 @@
                             android:id="@+id/check_noshadows"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="No shadows (-noshadows)"
+                            android:text="No shadows (-nodlights)"
                             android:textColor="@color/text_main"
                             android:textSize="12sp"
                             android:checked="false"
@@ -235,7 +247,7 @@
                             android:id="@+id/check_dlights"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Dynamic light"
+                            android:text="Global lighting (off = static)"
                             android:textColor="@color/text_main"
                             android:textSize="12sp"
                             android:checked="true" />

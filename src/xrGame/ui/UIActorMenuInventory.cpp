@@ -516,6 +516,9 @@ void CUIActorMenu::InitInventoryContents(CUIDragDropListEx* pBagList, bool onlyB
 
 bool CUIActorMenu::TryActiveSlot(CUICellItem* itm)
 {
+    if (!itm || !itm->m_pData || !m_pActorInvOwner)
+        return false;
+
     PIItem iitem = (PIItem)itm->m_pData;
     u16 slot = iitem->BaseSlot();
 
@@ -562,6 +565,9 @@ bool CUIActorMenu::ToSlotScript(CScriptGameObject* GO, bool force_place, u16 slo
 
 bool CUIActorMenu::ToSlot(CUICellItem* itm, bool force_place, u16 slot_id)
 {
+    if (!itm || !itm->m_pData || !m_pActorInvOwner)
+        return false;
+
     CUIDragDropListEx* old_owner = itm->OwnerList();
     PIItem iitem = (PIItem)itm->m_pData;
 
@@ -759,6 +765,9 @@ bool CUIActorMenu::ToBeltScript(CScriptGameObject* GO, bool b_use_cursor_pos)
 
 bool CUIActorMenu::ToBelt(CUICellItem* itm, bool b_use_cursor_pos)
 {
+    if (!itm || !itm->m_pData || !m_pActorInvOwner)
+        return false;
+
     PIItem iitem = (PIItem)itm->m_pData;
     bool b_own_item = (iitem->parent_id() == m_pActorInvOwner->object_id());
 
@@ -1574,7 +1583,20 @@ void CUIActorMenu::UpdateOutfit()
 
     if (ShadowOfChernobylMode)
     {
-        m_pLists[eInventoryBeltList]->ResetCellsCapacity();
+        // ResetCellsCapacity() resizes CUICellContainer::m_cells, which destroys
+        // every CUICell -- and each one owns the CUICellItem the list still holds.
+        // The VERIFY(ItemsCount() == 0) is therefore load-bearing: ClearAll()
+        // (UIDragDropListEx.cpp:396) clears the children first and then resets,
+        // so it satisfies the invariant. This branch did not, and because VERIFY
+        // compiles out outside XR_DEBUG, a release build would silently orphan
+        // the items -- while the debug build died with SIGTRAP on any unrelated
+        // double-click, since UpdateOutfit runs from the shared refresh path.
+        //
+        // Only reset when there is nothing to lose. If the list still holds items
+        // (possible with mods that put things on the SoC belt), leave the capacity
+        // alone and keep the items visible rather than dropping or moving them.
+        if (m_pLists[eInventoryBeltList]->ItemsCount() == 0)
+            m_pLists[eInventoryBeltList]->ResetCellsCapacity();
         return;
     }
     if (!outfit)

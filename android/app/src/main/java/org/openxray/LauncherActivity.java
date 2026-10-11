@@ -49,6 +49,7 @@ public class LauncherActivity extends AppCompatActivity {
     private Button mBtnBrowsePath;
     private Button mBtnCheckPath;
     private Button mBtnViewLogs;
+    private Button mBtnReportBug;
     private TextView mTextPathStatus;
 
     private RadioGroup mRadioGroupGameMode;
@@ -109,7 +110,135 @@ public class LauncherActivity extends AppCompatActivity {
         loadPreferences();
         checkAndRequestPermissions();
         checkGamePathStatus();
+        offerCrashReportIfPending();
         AppLog.i("Launcher", "LauncherActivity onCreate finished");
+    }
+
+    /**
+     * A session marker that survived the last run means the process died
+     * (native SIGSEGV/SIGABRT or an uncaught Java exception), because a clean
+     * exit deletes it in OpenXRayActivity.onDestroy. Offer to send the logs to
+     * GitHub before the user can touch anything else.
+     */
+    private void offerCrashReportIfPending() {
+        final CrashReporter.CrashInfo info = CrashReporter.checkPendingCrash(this);
+        if (info == null) return;
+
+        final String full = CrashReporter.buildReport(info, this);
+        StringBuilder msg = new StringBuilder();
+        msg.append(CrashReporter.describeCrash(info));
+        if (info.crashLine != null) {
+            msg.append("\n\n").append(info.crashLine);
+        }
+        msg.append('\n');
+
+        androidx.appcompat.app.AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Previous session ended unexpectedly")
+                .setCancelable(true);
+
+        if (GitHubIssueReporter.isConfigured()) {
+            // One tap: the logs go straight into an issue, no browser, no CAPTCHA.
+            msg.append("\nSend these logs to the GitHub issue tracker?");
+            b.setMessage(msg.toString())
+                .setPositiveButton("Send report", (d, w) -> sendCrashReportToGitHub(info));
+        } else {
+            msg.append("\nAutomatic reporting is not enabled in this build "
+                    + "(no repository token was baked in at compile time).");
+            b.setMessage(msg.toString());
+        }
+        b.setNeutralButton("Copy logs", (d, w) -> copyLogs(full));
+        b.setNegativeButton("Skip", (d, w) -> CrashReporter.consumePendingCrash(this));
+        b.show();
+    }
+
+    private void copyLogs(String text) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("OpenXRay Logs", text));
+            Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** One tap -> one issue. Falls back to a copyable report if it cannot send. */
+    private void sendCrashReportToGitHub(final CrashReporter.CrashInfo info) {
+        sendCrashReportToGitHub(info, true);
+    }
+
+    private void sendCrashReportToGitHub(final CrashReporter.CrashInfo info,
+                                         final boolean consumeOnSuccess) {
+        Toast.makeText(this, "Sending report to GitHub...", Toast.LENGTH_SHORT).show();
+        GitHubIssueReporter.report(info, this, result -> {
+            if (result.success) {
+                Toast.makeText(this, result.duplicate
+                        ? "Appended to an existing issue" : "Issue created", Toast.LENGTH_LONG).show();
+                // Only a real crash report may clear the pending marker: a
+                // diagnostics upload must not silently discard a crash.
+                if (consumeOnSuccess) CrashReporter.consumePendingCrash(this);
+                GitHubIssueReporter.openIssue(this, result.issueUrl);
+            } else {
+                // Network/token trouble must not eat the report: keep the text
+                // reachable so the user can paste it somewhere by hand.
+                Toast.makeText(this, result.error, Toast.LENGTH_LONG).show();
+                offerCrashReportFallback(info);
+            }
+        });
+    }
+
+    private void offerCrashReportFallback(final CrashReporter.CrashInfo info) {
+        final String full = CrashReporter.buildReport(info, this);
+        new AlertDialog.Builder(this)
+                .setTitle("Report not sent")
+                .setMessage("The logs are still available. Copy them and paste them "
+                        + "into a new issue, or share a zip instead.")
+                .setPositiveButton("Retry", (d, w) -> sendCrashReportToGitHub(info, false))
+                .setNeutralButton("Copy logs", (d, w) -> copyLogs(full))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    /**
+     * Manual bug report: the current session's logs, sent to the same issue
+     * tracker with one tap. Always available, whether or not a crash happened.
+     */
+    private void showBugTrackerDialog() {
+        String repo = BuildConfig.GITHUB_REPO;
+        StringBuilder msg = new StringBuilder();
+        msg.append("Report a problem with OpenXRay Android.\n\n");
+        msg.append("Issue tracker: ").append(repo).append('\n');
+        if (GitHubIssueReporter.isConfigured()) {
+            msg.append("\nOne tap sends the engine log, logcat and app log as a new "
+                    + "issue. Nothing else is uploaded.");
+        } else {
+            msg.append("\nAutomatic reporting is not enabled in this build, so you will "
+                    + "get the logs to paste into a new issue by hand.");
+        }
+
+        androidx.appcompat.app.AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Report a bug")
+                .setMessage(msg.toString())
+                .setNegativeButton("Close", null);
+
+        if (GitHubIssueReporter.isConfigured()) {
+            b.setPositiveButton("Send report", (d, w) ->
+                    sendCrashReportToGitHub(CrashReporter.forCurrentSession(this), false));
+        }
+        // Falls back to the repository page, so this button is useful whether or
+        // not a token was baked in.
+        b.setNeutralButton("Open tracker", (d, w) -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://github.com/" + repo + "/issues")));
+            } catch (Exception e) {
+                Toast.makeText(this, "Could not open the browser", Toast.LENGTH_SHORT).show();
+            }
+        });
+        // The crash dialog offers "Copy logs", but this manual path only offered
+        // "Send report" or the browser -- so once the crash marker had been
+        // consumed there was no way left to get the report text out at all.
+        // Always keep it reachable, token or no token.
+        b.setNeutralButton("Copy logs", (d, w) ->
+                copyLogs(CrashReporter.buildReport(CrashReporter.forCurrentSession(this), this)));
+        b.show();
     }
 
     private void initViews() {
@@ -117,12 +246,16 @@ public class LauncherActivity extends AppCompatActivity {
         mBtnBrowsePath = findViewById(R.id.btn_browse_path);
         mBtnCheckPath = findViewById(R.id.btn_check_path);
         mBtnViewLogs = findViewById(R.id.btn_view_logs);
+        mBtnReportBug = findViewById(R.id.btn_report_bug);
         mTextPathStatus = findViewById(R.id.text_path_status);
 
         mBtnBrowsePath.setOnClickListener(v -> openFolderPicker());
         mBtnCheckPath.setOnClickListener(v -> checkGamePathStatus());
         if (mBtnViewLogs != null) {
             mBtnViewLogs.setOnClickListener(v -> showLogsDialog());
+        }
+        if (mBtnReportBug != null) {
+            mBtnReportBug.setOnClickListener(v -> showBugTrackerDialog());
         }
 
         mRadioGroupGameMode = findViewById(R.id.radiogroup_gamemode);
@@ -459,10 +592,15 @@ public class LauncherActivity extends AppCompatActivity {
             argsBuilder.append("-nosound ");
         }
         if (mCheckNoShadows.isChecked()) {
-            argsBuilder.append("-noshadows ");
+            // -nodlights drops every dynamic light source outright (Light_DB.cpp),
+            // which is cheaper on a mobile GPU than -noshadows and still reads as
+            // "shadows gone" because without lights there is nothing casting them.
+            argsBuilder.append("-nodlights ");
         }
         if (!mCheckDLights.isChecked()) {
-            argsBuilder.append("-nodlights -sunstatic ");
+            // Static lighting: skip the dynamic sun shadow pass only. The sun keeps
+            // lighting the scene, so this stays readable -- unlike -nodlights.
+            argsBuilder.append("-sunstatic ");
         }
 
         String customArgs = mEditCustomArgs.getText().toString().trim();
@@ -515,8 +653,6 @@ public class LauncherActivity extends AppCompatActivity {
         gameIntent.putExtra("extra_args", finalArgs);
         gameIntent.putExtra("extra_game_path", pathStr);
         gameIntent.putExtra("extra_game_mode", gameMode);
-        gameIntent.putExtra("extra_res_width", resW);
-        gameIntent.putExtra("extra_res_height", resH);
         gameIntent.putExtra("extra_render_backend", renderBackend);
         gameIntent.putExtra("extra_look_sensitivity", sens);
         gameIntent.putExtra("extra_touch_opacity", opacity);
@@ -606,12 +742,10 @@ public class LauncherActivity extends AppCompatActivity {
         tv.setTypeface(android.graphics.Typeface.MONOSPACE);
         sv.addView(tv);
 
-        new AlertDialog.Builder(this)
+        androidx.appcompat.app.AlertDialog.Builder builder = new AlertDialog.Builder(this)
             .setTitle("OpenXRay Logs")
             .setView(sv)
-            .setPositiveButton("Save to File", (dialog, which) -> {
-                // Copy/pasting this into a chat window truncates it, and the tail
-                // is exactly the interesting part, so keep a full copy on disk.
+            .setPositiveButton("Share Zip", (dialog, which) -> {
                 File report = new File(logDir, "openxray_report.txt");
                 try (BufferedWriter writer = new BufferedWriter(new FileWriter(report, false))) {
                     writer.write(content.toString());
@@ -619,18 +753,64 @@ public class LauncherActivity extends AppCompatActivity {
                     Toast.makeText(this, "Could not save report: " + e.getMessage(), Toast.LENGTH_LONG).show();
                     return;
                 }
-                Toast.makeText(this, "Saved to " + report.getAbsolutePath(), Toast.LENGTH_LONG).show();
-            })
-            .setNeutralButton("Copy to Clipboard", (dialog, which) -> {
-                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                ClipData clip = ClipData.newPlainText("OpenXRay Logs", content.toString());
-                if (clipboard != null) {
-                    clipboard.setPrimaryClip(clip);
-                    Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show();
-                }
-            })
-            .setNegativeButton("Close", null)
-            .show();
+                shareLogsZip(logDir, report);
+            });
+
+        // Diagnostics upload for "broken but not crashing" reports. Consumes no
+        // crash marker: a pending crash stays reportable afterwards.
+        if (GitHubIssueReporter.isConfigured()) {
+            builder.setNeutralButton("Send to GitHub", (dialog, which) ->
+                    sendCrashReportToGitHub(CrashReporter.forCurrentSession(this), false));
+        }
+        builder.setNegativeButton("Close", null);
+        builder.show();
+    }
+
+    private void shareLogsZip(File logDir, File report) {
+        File zipFile = new File(logDir, "openxray_logs.zip");
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                new java.io.FileOutputStream(zipFile))) {
+            addToZip(zos, report, report.getName());
+            for (String name : new String[]{
+                    "openxray_app.log", "openxray_app.log.bkp",
+                    "openxray_logcat.log", "openxray_logcat.log.bkp",
+                    "frame_trace.log", "fsgame.ltx"}) {
+                File f = new File(logDir, name);
+                if (f.exists() && f.length() > 0) addToZip(zos, f, name);
+            }
+            File engineLog = AppLog.findEngineLog(logDir);
+            if (engineLog != null) {
+                addToZip(zos, engineLog, engineLog.getName());
+                File bkp = new File(engineLog.getParentFile(),
+                        engineLog.getName().replaceAll("\\.log$", ".bkp"));
+                if (bkp.exists() && bkp.length() > 0) addToZip(zos, bkp, bkp.getName());
+            }
+            File userLtx = new File(logDir, "_appdata_/user.ltx");
+            if (userLtx.exists()) addToZip(zos, userLtx, "user.ltx");
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not create zip: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                this, getPackageName() + ".fileprovider", zipFile);
+        android.content.Intent share = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        share.setType("application/zip");
+        share.putExtra(android.content.Intent.EXTRA_STREAM, uri);
+        share.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        share.setClipData(android.content.ClipData.newUri(getContentResolver(), "logs", uri));
+        startActivity(android.content.Intent.createChooser(share, "Share logs"));
+    }
+
+    private static void addToZip(java.util.zip.ZipOutputStream zos, File f, String entryName)
+            throws java.io.IOException {
+        zos.putNextEntry(new java.util.zip.ZipEntry(entryName));
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = fis.read(buf)) > 0) zos.write(buf, 0, n);
+        }
+        zos.closeEntry();
     }
 
     // Reads a logcat buffer without -f. Returns null when the app is not
@@ -803,10 +983,6 @@ public class LauncherActivity extends AppCompatActivity {
     private void updateUserLtxSettingsIfChanged(String modePathStr, String gameMode, String diff,
             boolean noShadows, boolean dLights, boolean noSun, boolean fastDxt,
             String graphicsPreset, int resW, int resH) {
-        if ("none".equals(graphicsPreset)) {
-            AppLog.i("Launcher", "Graphics preset is 'none', leaving user.ltx alone (set in game)");
-            return;
-        }
         String sig = graphicsPreset + "|" + resW + "x" + resH + "|"
                 + noShadows + "|" + dLights + "|" + noSun + "|" + fastDxt + "|" + diff;
         String key = "applied_gfx_signature_" + gameMode;
@@ -815,6 +991,16 @@ public class LauncherActivity extends AppCompatActivity {
         if (sig.equals(prev) && probe.exists()) {
             AppLog.i("Launcher", "Graphics selection unchanged, keeping in-game user.ltx");
             return;
+        }
+        if ("none".equals(graphicsPreset)) {
+            // Preset 'none' means the game owns its graphics settings, so no
+            // graphics key is written. The resolution is not a preset key though:
+            // it has its own spinner and its own saved preference, and returning
+            // early here left that spinner dead -- the choice was persisted in
+            // prefs but never reached user.ltx, so the game kept rendering at
+            // whatever vid_mode was there last.
+            AppLog.i("Launcher", "Graphics preset is 'none', writing resolution only: "
+                    + resW + "x" + resH);
         }
         updateUserLtxSettings(modePathStr, diff, noShadows, dLights, noSun, fastDxt, graphicsPreset, resW, resH);
         mPrefs.edit().putString(key, sig).apply();
@@ -844,7 +1030,12 @@ public class LauncherActivity extends AppCompatActivity {
 
             java.util.Map<String, String> settings = new java.util.LinkedHashMap<>();
             // _preset must come first: it loads rspec_*.ltx, lines below override it.
-            settings.put("_preset", presetTokenForId(graphicsPreset));
+            // presetTokenForId returns null for "none" -- writing that through would
+            // put a literal "_preset null" into user.ltx.
+            String presetToken = presetTokenForId(graphicsPreset);
+            if (presetToken != null) {
+                settings.put("_preset", presetToken);
+            }
             // Full-aspect values for this preset (texture quality, draw
             // distance, model quality...). Explicit sun/light checkbox
             // choices below still win over these.
@@ -871,23 +1062,30 @@ public class LauncherActivity extends AppCompatActivity {
                     settings.put("vid_mode", screenW + "x" + screenH);
                 }
             }
-            boolean sunOff = noSun || noShadows || !dLights;
+            // Only the "No sun" checkbox owns r2_sun. Static lighting deliberately keeps
+            // the sun: -sunstatic skips its shadow pass, it does not remove the
+            // light, so folding dLights in here used to turn static mode into
+            // "no sun" as well. "No shadows" goes through -nodlights now.
+            boolean sunOff = noSun;
             if (sunOff) {
                 settings.put("r2_sun", "off");
             } else {
                 settings.put("r2_sun", "on");
             }
-            if (noShadows) {
+            boolean staticLighting = !dLights;
+            if (staticLighting) {
                 settings.put("r2_sun_details", "off");
                 settings.put("r__actor_shadow", "off");
+                settings.put("r2_volumetric_lights", "off");
+                // r2_slight_fade is registered for 0.2..1 (xrRender_console.cpp)
+                // and CCC_Float rejects out-of-range values instead of clamping,
+                // so the old 0.05 was silently dropped by the engine. Left unset
+                // here on purpose -- with the sun shadow pass gone it has nothing
+                // left to modulate.
             } else {
                 settings.put("r2_sun_details", "on");
                 settings.put("r__actor_shadow", "on");
-            }
-            if (!dLights) {
-                settings.put("r2_volumetric_lights", "off");
-                settings.put("r2_slight_fade", "0.05");
-            } else {
+                settings.put("r2_volumetric_lights", "on");
                 settings.put("r2_slight_fade", "0.5");
             }
             if ("potato".equals(graphicsPreset)) {
@@ -897,6 +1095,20 @@ public class LauncherActivity extends AppCompatActivity {
                         settings.put(kv[0], kv[1]);
                     }
                 }
+            }
+
+            if ("none".equals(graphicsPreset)) {
+                // The preset is "none": the game owns its graphics settings, so
+                // nothing above may be written -- doing so would overwrite
+                // whatever the user set from the in-game console. The resolution
+                // is the one value the launcher owns outright, so keep that and
+                // drop the rest.
+                String vid = settings.get("vid_mode");
+                java.util.Map<String, String> resolutionOnly = new java.util.LinkedHashMap<>();
+                if (vid != null) {
+                    resolutionOnly.put("vid_mode", vid);
+                }
+                settings = resolutionOnly;
             }
 
             java.util.List<String> lines = new java.util.ArrayList<>();

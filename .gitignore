@@ -141,16 +141,42 @@ doc/doxygen/latex/*
 
 # ------------------------------------------------------------------------------
 # Local Backups & Scratch
+#
+# Anchored to the repository root on purpose. An unanchored "backup/" also matches
+# res/<mode>/backup/, and that directory is not scratch: it is the overlay
+# retirement manifest. OpenXRayActivity.removeRetiredOverlayScripts() reads the
+# file list from it and renames those scripts on the device, so losing it from
+# version control silently stops the retirement from ever happening again.
 # ------------------------------------------------------------------------------
-oldsrc/
-backup/
-scratch/
+/oldsrc/
+/backup/
+/scratch/
 
 # ------------------------------------------------------------------------------
-# Third-party checkouts fetched by scripts/build_angle.sh (ANGLE, depot_tools).
+# Third-party checkouts fetched by the build scripts
+#   - scripts/build_angle.sh     -> third_party/ (ANGLE, depot_tools)
+#   - Externals/build_android.sh -> oxr_deps/, AGS_SDK, sse2rvv
 # The build products land in android/app/src/main/jniLibs/<abi>/ (ignored above).
 # ------------------------------------------------------------------------------
 third_party/
+/Externals/AGS_SDK/
+/Externals/sse2rvv/
+
+# CMake build trees generated inside oxr_deps. The sources beside them
+# (oxr_deps/*-src) are tracked deliberately, so only the generated directories
+# are ignored rather than the whole dependency tree.
+/oxr_deps/*-build/
+/oxr_deps/*-subbuild/
+
+# ------------------------------------------------------------------------------
+# Reference dumps of the original game scripts. They are third-party game content
+# used for comparison only; nothing here is installed. What the app actually ships
+# lives under res/<mode>/gamedata/scripts/.
+# (scripts-soc/ is still tracked from before -- see the note in the commit that
+# adds scripts-cs/ if you want them consistent.)
+# ------------------------------------------------------------------------------
+/scripts-cs/
+/scripts-soc/
 
 # ------------------------------------------------------------------------------
 # Local packaging artifacts (bundles of the tracked res/*/gamedata trees).
