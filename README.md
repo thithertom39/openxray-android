@@ -12,6 +12,8 @@
 
 This rep is alpha for openxray port on android with support soc, cs, cop
 
+That is my fork of Eternal Entropia's project
+
 Install: each game lives in its own subfolder:
 - /storage/emulated/0/OpenXRay/soc <- gamedata.db of Shadow of Chernobyl
 - /storage/emulated/0/OpenXRay/cs  <- all gamedata and .db of Clear Sky
